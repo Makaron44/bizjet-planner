@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BizJet Tour Planner — PWA</title>
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{
+  --bg:#0f1115; --card:#151925; --muted:#9aa3b2; --text:#eef2ff;
+  --accent:#4f8cff; --success:#22c55e; --danger:#ef4444; --border:#23283a;
+  --radius:14px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+  font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial}
+a{color:var(--accent);text-decoration:none}
+header{
+  position:sticky;top:0;z-index:20;display:flex;gap:.75rem;align-items:center;
+  justify-content:space-between;padding:.7rem .9rem;background:#101423e6;
+  border-bottom:1px solid var(--border);backdrop-filter: blur(10px)
+}
+h1{font-size:1.05rem;margin:0}
+main{padding:1rem;max-width:1400px;margin:0 auto;display:grid;grid-template-columns:380px 440px 1fr;gap:1rem}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius)}
+.toolbar{padding:.7rem;border-bottom:1px solid var(--border);display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
+.list{padding:.5rem;max-height:70vh;overflow:auto}
+.leg{display:flex;gap:.75rem;align-items:flex-start;padding:.6rem .7rem;border:1px solid transparent;border-radius:12px}
+.leg:not(:last-child){margin-bottom:.35rem}
+.leg:hover{border-color:var(--border);background:rgba(255,255,255,.02)}
+.btn{
+  appearance:none;border:1px solid var(--border);background:#111525;color:var(--text);
+  padding:.5rem .7rem;border-radius:12px;cursor:pointer;display:inline-flex;gap:.45rem;align-items:center
+}
+.btn.success{border-color:transparent;background:linear-gradient(180deg,#22c55e,#16a34a)}
+.btn.danger{border-color:transparent;background:linear-gradient(180deg,#ef4444,#dc2626)}
+.field{display:flex;flex-direction:column;gap:.3rem;margin-bottom:.6rem}
+.field input,.field textarea,.field select{
+  background:#0e1322;border:1px solid var(--border);color:#eef2ff;padding:.55rem .65rem;border-radius:10px;width:100%
+}
+.badge{padding:.18rem .45rem;border-radius:8px;background:#0c1324;border:1px solid var(--border);font-size:.78rem;color:#c2cbda}
+#map{height:78vh;border-radius:12px;border:1px solid var(--border);}
+.muted{color:var(--muted)}
+.hr{height:1px;background:var(--border);margin:.7rem 0}
+.grid.two{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}
+.grid.one{display:grid;grid-template-columns:1fr;gap:.6rem}
+.row{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.sub{font-size:.9rem;color:var(--muted)}
+.pill{display:inline-flex;align-items:center;gap:.35rem;font-size:.8rem;padding:.2rem .5rem;border-radius:999px;border:1px solid var(--border);color:#c2cbda}
+@media (max-width:1220px){
+  main{grid-template-columns:1fr 1fr}
+  #editor{grid-column:1/-1}
+}
+@media (max-width:900px){
+  header{padding:.6rem .75rem}
+  main{grid-template-columns:1fr}
+  #map{height:56vh}
+  .list{max-height:46vh}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="left"><h1>✈️ BizJet Tour Planner</h1> <span class="badge" id="countBadge">0 lotów</span></div>
+  <div class="right">
+    <button class="btn" id="exportBtn">⬇️ Eksport JSON</button>
+    <label class="btn" for="importFile">⬆️ Import JSON</label>
+    <input id="importFile" type="file" accept="application/json" style="display:none" />
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <div class="toolbar">
+      <div class="field" style="margin:0">
+        <label>Zestaw tras</label>
+        <select id="routeSet"></select>
+      </div>
+      <div class="field" style="margin:0">
+        <label>Akcje</label>
+        <div class="row">
+          <button class="btn" id="addLegBtn">➕ Dodaj</button>
+          <button class="btn" id="resetChecksBtn">☑️ Wyzeruj</button>
+          <button class="btn" id="fitAllBtn">🗺️ Pokaż całą trasę</button>
+        </div>
+      </div>
+      <span class="badge" id="progressText">0 / 0 ukończone</span>
+    </div>
+    <div class="list" id="legsList"></div>
+  </section>
+
+  <section class="card" id="editor">
+    <div style="padding:1rem">
+      <div class="row">
+        <div>
+          <div class="muted">Szczegóły lotu</div>
+          <h2 id="detailTitle" style="margin:.2rem 0 0;font-size:1.15rem">Wybierz lot z listy</h2>
+          <div id="ilsSummary" class="sub">ILS (orig): — | ILS (dest): —</div>
+        </div>
+        <div style="flex:1"></div>
+        <button class="btn success" id="saveBtn" disabled>💾 Zapisz</button>
+        <button class="btn danger" id="deleteBtn" disabled>🗑️ Usuń</button>
+      </div>
+      <div class="hr"></div>
+      <div class="grid two">
+        <div class="field"><label>FROM (ICAO)</label><input id="f_from" placeholder="EPBC"></div>
+        <div class="field"><label>TO (ICAO)</label><input id="f_to" placeholder="LKTB"></div>
+        <div class="field"><label>Nazwa</label><input id="f_name" placeholder="Warszawa Babice → Brno"></div>
+        <div class="field"><label>Czas</label><input id="f_time" placeholder="~1:10"></div>
+        <div class="field"><label>SID</label><input id="f_sid" placeholder="np. MEBAN 4X / vectors"></div>
+        <div class="field"><label>STAR</label><input id="f_star" placeholder="np. NEMGU 4X"></div>
+        <div class="field" style="grid-column:1/-1"><label>ENROUTE (trasa)</label><input id="f_enroute" placeholder="UL984 – NEMGU – MEBAN"></div>
+        <div class="field"><label>APPROACH</label><input id="f_app" placeholder="ILS / RNAV RWY xx"></div>
+        <div class="field"><label>RWY / długość</label><input id="f_runway" placeholder="RWY 09/27 – 2650 m"></div>
+        <div class="field"><label>FREQS (ATC/ILS)</label><input id="f_freqs" placeholder="TWR 118.600, ILS 110.30"></div>
+        <div class="field" style="grid-column:1/-1"><label>Notatki</label><textarea id="f_notes" rows="3" placeholder="Uwaga na minima / teren"></textarea></div>
+      </div>
+      <div class="row">
+        <button class="btn" id="prefillILSBtn" disabled>📡 Prefill ILS</button>
+        <button class="btn" id="autoRouteBtn" disabled>✈️ Auto‑trasa</button>
+        <span class="muted">Prefill z bazy • Auto‑trasa generuje DCT + punkty pośrednie.</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" style="padding:.8rem">
+    <div id="map"></div>
+    <div style="display:flex;gap:.5rem;align-items:center;margin-top:.6rem">
+      <span class="muted">Kliknij lot na liście, by zaznaczyć na mapie. ENROUTE widoczne w liście i edytorze.</span>
+    </div>
+  </section>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const el = (id)=>document.getElementById(id);
+const routeSetSelect = el('routeSet');
+const legsList = el('legsList');
+const countBadge = el('countBadge');
+const progressText = el('progressText');
+const detailTitle = el('detailTitle');
+const ilsSummary = el('ilsSummary');
+const prefillBtn = el('prefillILSBtn');
+const autoRouteBtn = el('autoRouteBtn');
+const form = {
+  from: el('f_from'), to: el('f_to'), name: el('f_name'), time: el('f_time'),
+  sid: el('f_sid'), star: el('f_star'), enroute: el('f_enroute'),
+  app: el('f_app'), runway: el('f_runway'), freqs: el('f_freqs'), notes: el('f_notes')
+};
+
+const AIRPORT_DB = {
+  EPBC:{name:"Warszawa Babice",coord:[52.268,20.911],ils:{}},
+  LKTB:{name:"Brno–Tuřany",coord:[49.151,16.694],ils:{ "27":"110.30" }},
+  LOWS:{name:"Salzburg",coord:[47.793,13.004],ils:{ "33":"110.90" }},
+  LSZR:{name:"St. Gallen–Altenrhein",coord:[47.485,9.560],ils:{}},
+  LIMJ:{name:"Genova",coord:[44.414,8.837],ils:{ "28":"110.15" }},
+  LFMN:{name:"Nice",coord:[43.665,7.216],ils:{ "04L":"109.95" }},
+  LEGE:{name:"Girona",coord:[41.900,2.760],ils:{ "20":"110.10" }},
+  LPPR:{name:"Porto",coord:[41.242,-8.678],ils:{ "17":"110.30" }},
+  LXGB:{name:"Gibraltar",coord:[36.151,-5.349],ils:{}},
+  LEMG:{name:"Málaga",coord:[36.674,-4.499],ils:{ "12":"110.50" }},
+  LESU:{name:"Andorra–La Seu",coord:[42.338,1.409],ils:{}},
+  LFBZ:{name:"Biarritz",coord:[43.468,-1.531],ils:{ "09":"110.10" }},
+  EGHI:{name:"Southampton",coord:[50.951,-1.356],ils:{ "20":"110.70" }},
+  EBLG:{name:"Liège",coord:[50.637,5.443],ils:{ "22L":"110.30" }},
+  EDTY:{name:"Schwäbisch Hall",coord:[49.118,9.783],ils:{}},
+  LKMT:{name:"Ostrava",coord:[49.696,18.111],ils:{ "22":"111.15" }}
+};
+
+const DEFAULT_SETS = {
+  "europe-bizjet": {
+    name: "Europa — BizJet (HondaJet/Phenom)",
+    legs: [
+      {from:"EPBC", to:"LKTB", name:"Warszawa Babice → Brno", time:"~1:10",
+       sid:"Brak (GA / vectors)", enroute:"DCT WAR – UL984 – NEMGU – MEBAN",
+       star:"MEBAN 4X / NEMGU 4X", app:"ILS / RNAV RWY 09/27",
+       runway:"RWY 09/27 – 2,650 m", freqs:"TWR 118.600, ILS 110.30 (RWY 27)", notes:"Babice zwykle bez SID/STAR → vektoring."},
+      {from:"LKTB", to:"LOWS", name:"Brno → Salzburg", time:"~1:00",
+       sid:"OKR 2C", enroute:"N871 – ABTAN – PASAU",
+       star:"PASAU 2A", app:"ILS RWY 33",
+       runway:"RWY 15/33 – 2,850 m", freqs:"ILS 110.90 (RWY 33)", notes:"Górski teren — sprawdź MSA."},
+      {from:"LOWS", to:"LSZR", name:"Salzburg → St. Gallen", time:"~1:10",
+       sid:"RTT 2J", enroute:"DCT RTT – TULSI – LST",
+       star:"LST 3R", app:"RNAV RWY 10",
+       runway:"RWY 10/28 – 1,500 m", freqs:"—", notes:"Krótszy pas, świetny na bizjet."},
+      {from:"LSZR", to:"LIMJ", name:"St. Gallen → Genoa", time:"~1:20",
+       sid:"GERSA 1P", enroute:"Z669 – UTABA – TOPNU",
+       star:"TOPNU 3G", app:"ILS RWY 28",
+       runway:"RWY 10/28 – 2,916 m", freqs:"ILS 110.15 (RWY 28)", notes:"Podejście nad portem."},
+      {from:"LIMJ", to:"LFMN", name:"Genoa → Nice", time:"~0:50",
+       sid:"MIVOK 7P", enroute:"UN851 – MOKNO",
+       star:"MOKNO 6C", app:"ILS/RNAV RWY 04L/04R",
+       runway:"RWY 04L/22R – 2,570 m", freqs:"ILS 109.95 (04L)", notes:"Piękna linia brzegowa."},
+      {from:"LFMN", to:"LEGE", name:"Nice → Girona", time:"~1:15",
+       sid:"LANK 7A", enroute:"UQ71 – AGN – PERPI",
+       star:"PERPI 1G", app:"RNAV RWY 02 / ILS RWY 20",
+       runway:"RWY 02/20 – 2,400 m", freqs:"ILS 110.10 (20)", notes:""},
+      {from:"LEGE", to:"LPPR", name:"Girona → Porto", time:"~1:30",
+       sid:"ROLSA 5R", enroute:"UQ70 – TORDI – GAIAS",
+       star:"GAIAS 3C", app:"ILS RWY 17",
+       runway:"RWY 17/35 – 3,480 m", freqs:"ILS 110.30 (17)", notes:""},
+      {from:"LPPR", to:"LXGB", name:"Porto → Gibraltar", time:"~1:40",
+       sid:"AGUAS 1A", enroute:"UN10 – RIVEL",
+       star:"RIVEL 1A", app:"RNAV Y RWY 09",
+       runway:"RWY 09/27 – 1,829 m", freqs:"—", notes:"Słynne podejście przy skale."},
+      {from:"LXGB", to:"LEMG", name:"Gibraltar → Málaga", time:"~0:40",
+       sid:"GIB 1C", enroute:"UN851 – RONDA",
+       star:"RONDA 3B", app:"ILS RWY 12",
+       runway:"RWY 12/30 – 3,200 m", freqs:"ILS 110.50 (12)", notes:""},
+      {from:"LEMG", to:"LESU", name:"Málaga → Andorra (La Seu d’Urgell)", time:"~1:20",
+       sid:"SOPET 3C", enroute:"N865 – MATAM – ANDOR",
+       star:"— (górski dolot)", app:"RNAV RWY 03",
+       runway:"RWY 03/21 – 1,267 m", freqs:"—", notes:"Uwaga na góry i wiatr."},
+      {from:"LESU", to:"LFBZ", name:"Andorra → Biarritz", time:"~1:00",
+       sid:"RNAV DEP", enroute:"DCT RONLA – AGENA – NAVAS",
+       star:"NAVAS 2B", app:"ILS RWY 09",
+       runway:"RWY 09/27 – 2,250 m", freqs:"ILS 110.10 (09)", notes:""},
+      {from:"LFBZ", to:"EGHI", name:"Biarritz → Southampton", time:"~1:30",
+       sid:"MOU 3B", enroute:"UN864 – N864 – BOGNA",
+       star:"BOGNA 1X", app:"ILS RWY 20",
+       runway:"RWY 02/20 – 1,723 m", freqs:"ILS 110.70 (20)", notes:""},
+      {from:"EGHI", to:"EBLG", name:"Southampton → Liège", time:"~1:10",
+       sid:"SAM 3D", enroute:"UL9 – KONAN",
+       star:"KONAN 1N", app:"ILS RWY 22",
+       runway:"RWY 04R/22L – 3,690 m", freqs:"ILS 110.30 (22L)", notes:""},
+      {from:"EBLG", to:"EDTY", name:"Liège → Schwäbisch Hall", time:"~1:15",
+       sid:"SONEB 5D", enroute:"Z603 – DODEN",
+       star:"— (vectors)", app:"RNAV RWY 28",
+       runway:"RWY 10/28 – 1,540 m", freqs:"—", notes:"Świetne lotnisko biznesowe."},
+      {from:"EDTY", to:"LKMT", name:"Schwäbisch Hall → Ostrava", time:"~1:15",
+       sid:"NAPSA 1S", enroute:"DCT TUSIN – MORAV",
+       star:"MORAV 1C", app:"ILS RWY 22",
+       runway:"RWY 04/22 – 3,500 m", freqs:"ILS 111.15 (22)", notes:""},
+      {from:"LKMT", to:"EPBC", name:"Ostrava → Warszawa Babice", time:"~1:05",
+       sid:"MESAX 5C", enroute:"UL984 – NITBA – VETOS",
+       star:"— (Babice vectors)", app:"RNAV / VFR 10/28",
+       runway:"RWY 10/28 – 1,300 m (EPBC)", freqs:"TWR 118.600", notes:"Powrót na start."}
+    ]
+  }
+};
+
+function loadAllSets(){
+  try{
+    const raw = localStorage.getItem('bj_sets_sf');
+    if(!raw) return JSON.parse(JSON.stringify(DEFAULT_SETS));
+    const parsed = JSON.parse(raw);
+    for(const k in DEFAULT_SETS){ if(!(k in parsed)) parsed[k]=DEFAULT_SETS[k]; }
+    return parsed;
+  }catch(e){ return JSON.parse(JSON.stringify(DEFAULT_SETS)); }
+}
+function saveAllSets(){ localStorage.setItem('bj_sets_sf', JSON.stringify(state.sets)); }
+function loadChecksKey(setId){ return `bj_checks_sf_${setId}`; }
+function loadChecks(setId){ try{return JSON.parse(localStorage.getItem(loadChecksKey(setId)))||{}}catch(e){return{}} }
+function saveChecks(setId, obj){ localStorage.setItem(loadChecksKey(setId), JSON.stringify(obj)); }
+function pad(n){ return n<10 ? `0${n}` : String(n); }
+
+let state = {
+  sets: loadAllSets(),
+  activeSetId: localStorage.getItem('activeSetId_sf') || 'europe-bizjet',
+  selectedIndex: null
+};
+
+function renderRouteSetOptions(){
+  routeSetSelect.innerHTML='';
+  for(const [id,s] of Object.entries(state.sets)){
+    const opt = document.createElement('option'); opt.value=id; opt.textContent=s.name; routeSetSelect.appendChild(opt);
+  }
+  if(!(state.activeSetId in state.sets)) state.activeSetId = Object.keys(state.sets)[0];
+  routeSetSelect.value = state.activeSetId;
+}
+function renderLegs(){
+  legsList.innerHTML='';
+  const set = state.sets[state.activeSetId] || Object.values(state.sets)[0];
+  if(!set){ console.error('Brak zestawów tras'); return; }
+  const checks = loadChecks(state.activeSetId);
+  let done=0;
+  set.legs.forEach((leg, idx)=>{
+    const row = document.createElement('div'); row.className='leg';
+    const cb = document.createElement('input'); cb.type='checkbox'; cb.checked=!!checks[idx];
+    cb.addEventListener('change', ()=>{ checks[idx]=cb.checked; saveChecks(state.activeSetId, checks); renderProgress(); });
+    const meta = document.createElement('div'); meta.style.flex='1';
+    const title = document.createElement('div'); title.style.fontWeight='700'; title.textContent=`${pad(idx+1)}. ${leg.from} → ${leg.to}`;
+    const sub = document.createElement('div'); sub.className='sub'; sub.textContent=`${leg.name||''} • ${leg.time||''}`;
+    const sub2 = document.createElement('div'); sub2.className='sub'; sub2.textContent=`ENROUTE: ${leg.enroute||'—'}`;
+    meta.appendChild(title); meta.appendChild(sub); meta.appendChild(sub2);
+    const open = document.createElement('button'); open.className='btn'; open.textContent='🗺️/✏️ Otwórz';
+    open.addEventListener('click', ()=> selectLeg(idx));
+    row.appendChild(cb); row.appendChild(meta); row.appendChild(open);
+    legsList.appendChild(row);
+    if(cb.checked) done++;
+  });
+  countBadge.textContent = `${set.legs.length} lotów`;
+  renderProgress(done, set.legs.length);
+  drawAllLegs();
+}
+function renderProgress(done=null,total=null){
+  const set = state.sets[state.activeSetId] || Object.values(state.sets)[0];
+  const checks = loadChecks(state.activeSetId);
+  if(done===null||total===null){ done=Object.values(checks).filter(Boolean).length; total=set.legs.length; }
+  progressText.textContent = `${done} / ${total} ukończone`;
+}
+
+function selectLeg(idx){
+  state.selectedIndex = idx;
+  const leg = state.sets[state.activeSetId].legs[idx];
+  for(const k in form){ form[k].value = leg[k] || ''; }
+  detailTitle.textContent = `${pad(idx+1)}. ${leg.from} → ${leg.to}`;
+  prefillBtn.disabled = false;
+  autoRouteBtn.disabled = false;
+  el('saveBtn').disabled = false;
+  el('deleteBtn').disabled = false;
+  updateILSSummary();
+  highlightLeg(idx);
+}
+function updateILSSummary(){
+  if(state.selectedIndex==null){ ilsSummary.textContent = "ILS (orig): — | ILS (dest): —"; return; }
+  const leg = state.sets[state.activeSetId].legs[state.selectedIndex];
+  const orig = AIRPORT_DB[leg.from]?.ils || {};
+  const dest = AIRPORT_DB[leg.to]?.ils || {};
+  const o = Object.entries(orig).map(([r,f])=> f?`${r}:${f}`:null).filter(Boolean).join(", ") || "—";
+  const d = Object.entries(dest).map(([r,f])=> f?`${r}:${f}`:null).filter(Boolean).join(", ") || "—";
+  ilsSummary.textContent = `ILS (orig): ${o} | ILS (dest): ${d}`;
+}
+function saveCurrent(){
+  if(state.selectedIndex==null) return;
+  const leg = state.sets[state.activeSetId].legs[state.selectedIndex];
+  for(const k in form){ leg[k] = form[k].value.trim(); }
+  saveAllSets();
+  renderLegs();
+  selectLeg(state.selectedIndex);
+}
+function deleteCurrent(){
+  if(state.selectedIndex==null) return;
+  const set = state.sets[state.activeSetId];
+  set.legs.splice(state.selectedIndex,1);
+  saveAllSets();
+  state.selectedIndex = null;
+  renderLegs();
+  detailTitle.textContent = 'Wybierz lot z listy';
+  for(const k in form){ form[k].value=''; }
+  prefillBtn.disabled = true; autoRouteBtn.disabled = true; el('saveBtn').disabled = true; el('deleteBtn').disabled = true;
+}
+function addLeg(){
+  const set = state.sets[state.activeSetId];
+  set.legs.push({from:"",to:"",name:"",time:"",sid:"",star:"",enroute:"",app:"",runway:"",freqs:"",notes:""});
+  saveAllSets(); renderLegs(); selectLeg(set.legs.length-1);
+}
+
+function prefillILS(){
+  if(state.selectedIndex==null) return;
+  const leg = state.sets[state.activeSetId].legs[state.selectedIndex];
+  const dest = AIRPORT_DB[leg.to]?.ils || {};
+  const destList = Object.entries(dest).map(([r,f])=> f?`ILS ${r}: ${f}`:null).filter(Boolean).join(", ");
+  if(destList){
+    const already = form.freqs.value.trim();
+    form.freqs.value = already ? (already + "; " + destList) : destList;
+    updateILSSummary();
+  }
+}
+
+function autoRoute(){
+  if(state.selectedIndex==null) return;
+  const leg = state.sets[state.activeSetId].legs[state.selectedIndex];
+  const a = AIRPORT_DB[leg.from]?.coord, b = AIRPORT_DB[leg.to]?.coord;
+  if(!a || !b){ return; }
+  const dist = haversine(a[0],a[1],b[0],b[1]);
+  let route = `${leg.from} DCT ${leg.to}`;
+  if(dist > 250){
+    const p1 = intermediatePoint(a,b,0.33);
+    const p2 = intermediatePoint(a,b,0.66);
+    route = `${leg.from} DCT ${coordFix(p1)} DCT ${coordFix(p2)} DCT ${leg.to}`;
+  }
+  form.enroute.value = route;
+}
+function toRad(d){ return d*Math.PI/180; }
+function toDeg(r){ return r*180/Math.PI; }
+function haversine(lat1,lon1,lat2,lon2){
+  const R = 3440.065;
+  const dLat = toRad(lat2-lat1), dLon = toRad(lon2-lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  const c = 2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R*c;
+}
+function intermediatePoint(a,b,f){
+  const lat1=toRad(a[0]), lon1=toRad(a[1]);
+  const lat2=toRad(b[0]), lon2=toRad(b[1]);
+  const d = 2*Math.asin(Math.sqrt(Math.sin((lat2-lat1)/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin((lon2-lon1)/2)**2));
+  if(d===0) return a;
+  const A = Math.sin((1-f)*d)/Math.sin(d);
+  const B = Math.sin(f*d)/Math.sin(d);
+  const x = A*Math.cos(lat1)*Math.cos(lon1) + B*Math.cos(lat2)*Math.cos(lon2);
+  const y = A*Math.cos(lat1)*Math.sin(lon1) + B*Math.cos(lat2)*Math.sin(lon2);
+  const z = A*Math.sin(lat1) + B*Math.sin(lat2);
+  const lat = Math.atan2(z, Math.sqrt(x*x + y*y));
+  const lon = Math.atan2(y, x);
+  return [toDeg(lat), toDeg(lon)];
+}
+function coordFix(p){
+  const ns = p[0]>=0?'N':'S', ew = p[1]>=0?'E':'W';
+  const la = Math.floor(Math.abs(p[0])).toString().padStart(2,'0');
+  const lo = Math.floor(Math.abs(p[1])).toString().padStart(3,'0');
+  return `${ns}${la}${ew}${lo}`;
+}
+
+let map = L.map('map').setView([50.06, 14.44], 5);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 10, attribution: '&copy; OpenStreetMap'}).addTo(map);
+let layerGroup = L.layerGroup().addTo(map);
+let highlightGroup = L.layerGroup().addTo(map);
+function drawAllLegs(){
+  layerGroup.clearLayers();
+  const set = state.sets[state.activeSetId] || Object.values(state.sets)[0];
+  const bounds = [];
+  set.legs.forEach(leg=>{
+    const a = AIRPORT_DB[leg.from]?.coord, b = AIRPORT_DB[leg.to]?.coord;
+    if(a){ L.circleMarker(a,{radius:4}).bindPopup(leg.from).addTo(layerGroup); bounds.push(a); }
+    if(b){ L.circleMarker(b,{radius:4}).bindPopup(leg.to).addTo(layerGroup); bounds.push(b); }
+    if(a && b){ L.polyline([a,b]).addTo(layerGroup); }
+  });
+  if(bounds.length){ map.fitBounds(bounds, {padding:[20,20]}); }
+}
+function highlightLeg(idx){
+  highlightGroup.clearLayers();
+  const set = state.sets[state.activeSetId] || Object.values(state.sets)[0];
+  const leg = set.legs[idx];
+  const a = AIRPORT_DB[leg.from]?.coord, b = AIRPORT_DB[leg.to]?.coord;
+  if(a){ L.marker(a).bindPopup(`${leg.from}`).addTo(highlightGroup); }
+  if(b){ L.marker(b).bindPopup(`${leg.to}`).addTo(highlightGroup); }
+  if(a && b){
+    const line = L.polyline([a,b], {weight:5});
+    highlightGroup.addLayer(line);
+    map.fitBounds(line.getBounds(), {padding:[40,40]});
+  }
+}
+
+function exportJSON(){
+  const data = JSON.stringify(state.sets, null, 2);
+  const blob = new Blob([data], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download='bizjet-tour-sets.json'; a.click(); URL.revokeObjectURL(url);
+}
+el('exportBtn').addEventListener('click', exportJSON);
+el('importFile').addEventListener('change', (e)=>{
+  if(e.target.files && e.target.files[0]){
+    const reader = new FileReader();
+    reader.onload = ()=>{
+      try{
+        const parsed = JSON.parse(reader.result);
+        state.sets = parsed; saveAllSets(); renderRouteSetOptions(); renderLegs();
+      }catch(err){ alert('Błąd importu: ' + err.message); }
+    };
+    reader.readAsText(e.target.files[0]);
+  }
+  e.target.value='';
+});
+
+routeSetSelect.addEventListener('change', ()=>{
+  state.activeSetId = routeSetSelect.value; localStorage.setItem('activeSetId_sf', state.activeSetId);
+  state.selectedIndex=null; renderLegs();
+  detailTitle.textContent='Wybierz lot z listy'; ilsSummary.textContent='ILS (orig): — | ILS (dest): —';
+  for(const k in form){ form[k].value=''; }
+  prefillBtn.disabled=true; autoRouteBtn.disabled=true; el('saveBtn').disabled=true; el('deleteBtn').disabled=true;
+});
+el('addLegBtn').addEventListener('click', addLeg);
+el('resetChecksBtn').addEventListener('click', ()=>{ if(confirm('Wyzerować odhaczenia w tym zestawie?')){ saveChecks(state.activeSetId, {}); renderLegs(); } });
+el('fitAllBtn').addEventListener('click', drawAllLegs);
+el('saveBtn').addEventListener('click', saveCurrent);
+el('deleteBtn').addEventListener('click', deleteCurrent);
+prefillBtn.addEventListener('click', prefillILS);
+autoRouteBtn.addEventListener('click', autoRoute);
+// ---- URUCHOMIENIE APLIKACJI ----
+renderRouteSetOptions();
+renderLegs();
+
+if ("serviceWorker" in navigator) { navigator.serviceWorker.register("service-worker.js"); }
+</script>
+</body>
+</html>
